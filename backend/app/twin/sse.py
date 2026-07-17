@@ -23,15 +23,17 @@ async def ditto_sse(
     *,
     base_url: str,
     auth: tuple[str, str],
-    thing_id: str,
+    thing_ids: str,
     on_connect: Optional[Callable[[], Awaitable[None]]] = None,
     on_disconnect: Optional[Callable[[], Awaitable[None]]] = None,
     watchdog_s: float = 60.0,
     backoff_start: float = 1.0,
     backoff_cap: float = 30.0,
 ) -> AsyncGenerator[dict, None]:
+    # ``thing_ids`` is a comma-joined list of thing ids (one stream for all four
+    # components, CONTRACTS §1); each event's ``thingId`` routes it downstream.
     url = "/api/2/things"
-    params = {"ids": thing_id, "fields": "thingId,features"}
+    params = {"ids": thing_ids, "fields": "thingId,features"}
     headers = {"Accept": "text/event-stream"}
     backoff = backoff_start
 

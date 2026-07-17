@@ -1,0 +1,12 @@
+{
+  "attributes": { "name": "Pump 01", "type": "centrifugal-pump", "location": "Plant A / Line 2" },
+  "features": {
+    "telemetry": {
+      "properties": { "flow": 140.0, "pressure": 3.8, "temp": 54.5, "ts": "1970-01-01T00:00:00Z" }
+    },
+    "pump": {
+      "properties": { "pump_speed": 70 },
+      "desiredProperties": { "pump_speed": 70 }
+    }
+  }
+}

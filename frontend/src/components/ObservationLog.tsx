@@ -122,12 +122,50 @@ function ObservationRow({ obs }: { obs: Observation }) {
         <span className={`text-[10px] font-semibold uppercase tracking-wide ${s.text}`}>{s.label}</span>
         <span className="text-hair-2">·</span>
         <SourceBadge source={obs.source} />
+        <ComponentBadge component={obs.component} />
       </div>
     </li>
   )
 }
 
+function ComponentBadge({ component }: { component: Observation['component'] }) {
+  if (component == null) {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded px-1.5 py-px font-mono text-[10px] italic text-muted ring-1 ring-inset ring-hair"
+        title="System-wide / cross-component"
+      >
+        system
+      </span>
+    )
+  }
+  return (
+    <span
+      className="rounded bg-white/[0.05] px-1.5 py-px font-mono text-[10px] text-ink-2"
+      title={`org.acme:${component}-01`}
+    >
+      {component}
+    </span>
+  )
+}
+
 function SourceBadge({ source }: { source: Observation['source'] }) {
+  // operator (human write) is visually distinct from rule/llm: a ⚡ bolt on a
+  // neutral violet accent — clearly "someone acted", not an automated flag.
+  if (source === 'operator') {
+    return (
+      <span
+        className="inline-flex items-center gap-1 rounded px-1.5 py-px text-[10px] font-medium"
+        style={{ background: 'color-mix(in srgb, var(--color-rpm) 14%, transparent)', color: 'var(--color-rpm)' }}
+        title="Operator (human) write via /api/control"
+      >
+        <svg viewBox="0 0 24 24" className="h-2.5 w-2.5" fill="currentColor" stroke="none">
+          <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+        </svg>
+        operator
+      </span>
+    )
+  }
   const isLlm = source === 'llm'
   return (
     <span

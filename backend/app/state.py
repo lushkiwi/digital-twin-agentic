@@ -93,6 +93,7 @@ class ObservationStore:
         source: str,
         title: str,
         detail: str,
+        component: Optional[str] = None,
         ts: Optional[str] = None,
     ) -> dict:
         self._counter += 1
@@ -101,6 +102,7 @@ class ObservationStore:
             "ts": ts or now_iso(),
             "severity": severity,
             "source": source,
+            "component": component,
             "title": title,
             "detail": detail,
         }
@@ -121,8 +123,11 @@ class AppState:
     def __init__(self) -> None:
         self.telemetry = TelemetryBuffer(maxlen=600)
         self.observations = ObservationStore(maxlen=200)
-        self.twin_cache: dict = {}
+        # V2: one cached thing per thing id (dict[thing_id, thing]).  SSE events are
+        # routed here by their ``thingId`` and deep-merged (CONTRACTS §1).
+        self.twin_cache: dict[str, dict] = {}
         self.ditto_connected: bool = False
+        self._dirty: bool = False
         self._broadcaster: Optional[Callable[[dict], Awaitable[None]]] = None
 
     # ---- broadcast wiring ----------------------------------------------------
@@ -133,13 +138,28 @@ class AppState:
         if self._broadcaster is not None:
             await self._broadcaster(frame)
 
-    # ---- twin cache ----------------------------------------------------------
-    def seed_twin(self, thing: dict) -> None:
-        """Replace the cached thing wholesale (used after a full GET)."""
-        self.twin_cache = copy.deepcopy(thing) if thing else {}
+    # ---- per-thing twin cache ------------------------------------------------
+    def seed_twin(self, thing_id: str, thing: Optional[dict]) -> None:
+        """Replace one cached thing wholesale (used after a full GET)."""
+        self.twin_cache[thing_id] = copy.deepcopy(thing) if thing else {}
 
-    def merge_twin(self, partial: dict) -> None:
-        deep_merge(self.twin_cache, partial)
+    def merge_twin(self, thing_id: str, partial: dict) -> None:
+        """Deep-merge an SSE partial into the cached thing for ``thing_id``."""
+        deep_merge(self.twin_cache.setdefault(thing_id, {}), partial)
+
+    def get_twin(self, thing_id: str) -> dict:
+        return self.twin_cache.get(thing_id, {})
+
+    # ---- 1 Hz flusher dirty flag ---------------------------------------------
+    def mark_dirty(self) -> None:
+        """Signal that a telemetry-touching event arrived; the flusher coalesces."""
+        self._dirty = True
+
+    def take_dirty(self) -> bool:
+        """Consume-and-clear the dirty flag (returns whether it was set)."""
+        was = self._dirty
+        self._dirty = False
+        return was
 
     def status_frame(self) -> dict:
         return {"type": "status", "data": {"ditto_connected": self.ditto_connected}}

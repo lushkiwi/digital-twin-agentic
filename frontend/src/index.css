@@ -29,10 +29,15 @@
   --color-accent: #3987e5;
   --color-accent-2: #2a78d6;
 
-  /* telemetry series */
+  /* telemetry series (dataviz categorical palette — dark steps, validated) */
   --color-temp: #d95926; /* orange */
   --color-pressure: #3987e5; /* blue */
-  --color-flow: #199e70; /* aqua */
+  --color-flow: #199e70; /* aqua (also inflow) */
+  --color-rpm: #9085e9; /* violet */
+  --color-current: #c98500; /* yellow */
+  --color-level: #d55181; /* magenta */
+  --color-position: #008300; /* green */
+  --color-outflow: #d95926; /* orange (tank drain) */
 
   /* status / severity (fixed, never themed) */
   --color-sev-info: #3987e5;
@@ -122,6 +127,82 @@ body {
 }
 .dt-fade-in {
   animation: dt-fade-in 0.28s ease-out both;
+}
+
+@keyframes dt-slide-in {
+  from {
+    opacity: 0;
+    transform: translateX(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateX(0);
+  }
+}
+.dt-slide-in {
+  animation: dt-slide-in 0.26s cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+
+/* SCADA schematic: pipe flow animation (dash-offset marching in flow direction).
+   Duration is set inline, inversely proportional to flow; below ~2 L/min the
+   pipe is rendered static + dimmed and carries no animation. */
+@keyframes dt-flow {
+  to {
+    stroke-dashoffset: -16;
+  }
+}
+
+/* Clickable schematic node: pointer + a quiet hover lift on the drawn shape.
+   The default focus ring on a tabindex'd <g> reads as a false "selected"
+   halo, so we suppress it and show an accent glow for keyboard focus only. */
+.dt-node {
+  cursor: pointer;
+  outline: none;
+}
+.dt-node .dt-node-shape {
+  transition: filter 0.18s ease;
+}
+.dt-node:hover .dt-node-shape {
+  filter: drop-shadow(0 0 7px rgba(255, 255, 255, 0.16));
+}
+.dt-node:focus-visible .dt-node-shape {
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--color-accent) 75%, transparent));
+}
+
+/* Manual-control range slider — themed to the accent, quiet track. */
+.dt-range {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--color-hair-2);
+  outline: none;
+}
+.dt-range:disabled {
+  opacity: 0.5;
+}
+.dt-range::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 15px;
+  height: 15px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-surface);
+  box-shadow: 0 0 0 1px var(--color-accent);
+  cursor: pointer;
+  transition: transform 0.12s ease;
+}
+.dt-range::-webkit-slider-thumb:hover {
+  transform: scale(1.12);
+}
+.dt-range::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 999px;
+  background: var(--color-accent);
+  border: 2px solid var(--color-surface);
+  cursor: pointer;
 }
 
 /* Recharts: keep focus outlines off the surfaces, let our tooltip style win */

@@ -5,6 +5,72 @@ Newest entries at the top. Keep entries short; link code/docs instead of duplica
 
 ---
 
+## 2026-07-17 — v2 SHIPPED: cascade demo verified live end-to-end
+
+### Status: ✅ complete — all phases done, live-rehearsed through the real UI
+
+Measured live cascade vs the derived timing table (contract §2.1): motor sag rule 30s
+(predicted ~27), cross-component root-cause 36s (~30-35), tank warn 48s (~44), tank
+critical 75s (~72). Physics-derivation-first design pays off again.
+
+Full demo loop verified through the browser: bearing fault → sleeper escalation +
+reflection LLM independently diagnosing "rpm down, current up = bearing fault" and even
+predicting time-to-empty → chat "find the root cause and fix it" → agent pulled
+observations, system state, motor trend, named the motor, `set_motor_rpm(2600)` →
+flow restored ~141 L/min → manual beat: tank drawer, drain 140→110, Apply →
+operator observation + Ditto 204 + sim convergence → level recovered 41%+ →
+"Tank level recovered" + reflection crediting the operator's action. Audit trail shows
+rule | llm | operator sources interleaved in one feed.
+
+### Notable emergent behavior
+- After compensation (setpoint 2600, rpm 1820), the sag + flow-deficit rules re-fire
+  against the NEW setpoint — semantically honest ("motor still can't meet command";
+  fault compensated, not fixed) and it keeps the motor node amber. Kept as a feature.
+- Reflection LLM outputs got genuinely impressive with full-system context: time-to-empty
+  prediction, plateau detection ("settled at a fixed degraded state rather than worsening"),
+  and crediting specific operator actions by observation id.
+
+### v1→v2 contract fix found by the sim agent
+Bearing equilibrium prose said 77.5°C; the equations give 71.5°C (temp_target falls as
+rpm sags). Equations are authoritative; prose corrected. Both warn-only, no behavior change.
+
+---
+
+## 2026-07-17 — v2 kickoff: multi-component system + schematic + manual control
+
+### Status: ✅ done (superseded by the "v2 SHIPPED" entry above)
+
+User direction after the v1 demo: chains of coupled components controlled separately,
+a clickable 2D/3D system view with per-part summaries, and manual (non-LLM) control.
+
+### Decisions (user-confirmed)
+- 2D SVG SCADA-style schematic now; 3D is a stretch goal only.
+- Topology: Motor → Pump → Valve → Tank, coupled physics, cascading faults
+  (bearing sag → flow deficit → tank level fall = the cross-component root-cause demo).
+- One Ditto thing per component (org.acme:{motor,pump,valve,tank}-01) — true
+  system-of-systems, one SSE stream with 4 ids.
+- Manual control via click-to-focus drawer whose writes go through the SAME validated
+  executor as LLM tools, each emitting an "operator" observation → unified audit trail
+  (rule | llm | operator interleaved in one feed).
+- New spine: backend/app/params.py — single registry of writable params driving LLM tool
+  schemas, control-route validation, and the drawer's editors. Bounds live in one place.
+- WS telemetry frame goes nested-per-component (BREAKING); built by a 1 Hz coalescing
+  flusher that runs sleeper rules first so per-component status is never stale.
+
+### Phase 0 shipped
+CONTRACTS.md fully rewritten for v2 (physics with derived equilibria + cascade timing
+table — applying the v1 "verify fault math analytically" lesson), params.py (verified:
+bounds, extra-forbid, schema gen), 4 thing JSONs, create_things.sh, Makefile fault
+targets per component, THING_ID → THING_NS.
+
+### Watch items
+- Cross-component rule false positives on setpoint ramps → slew-aware grace window
+  (max(20, |Δsetpoint|/60 + 5)s) + a dedicated no-false-positive test.
+- 8 Ditto PUTs/s from the sim → gathered with return_exceptions; 0.5 Hz fallback lever.
+- Pydantic v2 gotcha hit in params.py: create_model needs ConfigDict, not a class.
+
+---
+
 ## 2026-07-17 — Day 1: full MVP built and demo-rehearsed
 
 ### Status: ✅ end-to-end working

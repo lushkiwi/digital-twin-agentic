@@ -1,9 +1,13 @@
 import type {
   ChatEvent,
+  ComponentId,
   Config,
+  ControlResponse,
   HistoryMessage,
   Observation,
-  TelemetryPoint,
+  ParamsResponse,
+  SystemResponse,
+  TelemetryFrame,
   TestResult,
 } from '../types'
 
@@ -23,21 +27,73 @@ async function postJson<T>(url: string, body: unknown): Promise<T> {
   return (await res.json()) as T
 }
 
+/**
+ * Demo mode (`?demo=1`) mirrors v1: the UI must be fully exercisable with no
+ * backend. Reads are seeded into the store directly; the only network-shaped
+ * call the UI makes interactively is POST /api/control, so we simulate its
+ * success here so the manual-control money-shot (ditto_status 204) is visible.
+ */
+let DEMO = false
+export function setDemoMode(v: boolean): void {
+  DEMO = v
+}
+
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
+
 // ---- REST helpers (CONTRACTS §3) ----
 
 export function getHealth(): Promise<{ ok: boolean; ditto_connected: boolean }> {
   return getJson('/api/health')
 }
 
-/** Chart backfill on page load. */
-export async function getTelemetry(minutes = 10): Promise<TelemetryPoint[]> {
-  const r = await getJson<{ points: TelemetryPoint[] }>(`/api/telemetry?minutes=${minutes}`)
+/** Chart backfill on page load — v2 frame data objects, oldest first. */
+export async function getTelemetry(minutes = 10): Promise<TelemetryFrame[]> {
+  const r = await getJson<{ points: TelemetryFrame[] }>(`/api/telemetry?minutes=${minutes}`)
   return r.points ?? []
 }
 
 export async function getObservations(limit = 50): Promise<Observation[]> {
   const r = await getJson<{ observations: Observation[] }>(`/api/observations?limit=${limit}`)
   return r.observations ?? []
+}
+
+/** Writable-parameter registry that drives the manual-control editors. */
+export function getParams(): Promise<ParamsResponse> {
+  return getJson('/api/params')
+}
+
+/** Full snapshot (reported + desired + telemetry + status per component). */
+export function getSystem(): Promise<SystemResponse> {
+  return getJson('/api/system')
+}
+
+/**
+ * Operator write — POST /api/control/{component}/{param}. Routes through the
+ * same executor as LLM writes; success returns ditto_status 204 and emits an
+ * operator observation server-side.
+ */
+export function postControl(
+  component: ComponentId,
+  param: string,
+  value: number,
+  reason?: string,
+): Promise<ControlResponse> {
+  if (DEMO) {
+    // Simulate the executor round-trip so the drawer can show the 204 money-shot.
+    return sleep(480).then(() => ({
+      ok: true,
+      ditto_status: 204,
+      ditto_request: {
+        method: 'PUT',
+        path: `/api/2/things/org.acme:${component}-01/features/${component}/desiredProperties/${param}`,
+        body: value,
+      },
+    }))
+  }
+  return postJson(`/api/control/${component}/${param}`, {
+    value,
+    reason: reason ?? 'manual operator adjustment',
+  })
 }
 
 export function getConfig(): Promise<Config> {

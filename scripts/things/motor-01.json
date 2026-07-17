@@ -1,0 +1,12 @@
+{
+  "attributes": { "name": "Motor 01", "type": "induction-motor", "location": "Plant A / Line 2" },
+  "features": {
+    "telemetry": {
+      "properties": { "rpm": 1800.0, "temp": 55.0, "current": 7.6, "ts": "1970-01-01T00:00:00Z" }
+    },
+    "motor": {
+      "properties": { "rpm_setpoint": 1800 },
+      "desiredProperties": { "rpm_setpoint": 1800 }
+    }
+  }
+}

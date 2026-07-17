@@ -1,0 +1,12 @@
+{
+  "attributes": { "name": "Tank 01", "type": "buffer-tank", "capacity_l": 200, "location": "Plant A / Line 2" },
+  "features": {
+    "telemetry": {
+      "properties": { "level_pct": 50.0, "inflow": 140.0, "outflow": 140.0, "ts": "1970-01-01T00:00:00Z" }
+    },
+    "tank": {
+      "properties": { "drain_rate": 140 },
+      "desiredProperties": { "drain_rate": 140 }
+    }
+  }
+}

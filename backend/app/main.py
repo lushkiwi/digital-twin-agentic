@@ -15,8 +15,9 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .agents.sleeper import sleeper
 from .config import settings
-from .ingest import run_ingest
+from .ingest import run_frame_flusher, run_ingest
 from .routes.chat import router as chat_router
+from .routes.control import router as control_router
 from .routes.llm_config import router as config_router
 from .routes.system import router as system_router
 from .state import app_state
@@ -32,6 +33,7 @@ async def lifespan(app: FastAPI):
 
     tasks = [
         asyncio.create_task(run_ingest(), name="ditto-ingest"),
+        asyncio.create_task(run_frame_flusher(), name="frame-flusher"),
         asyncio.create_task(sleeper.reflect_loop(), name="sleeper-reflect"),
     ]
     try:
@@ -63,6 +65,7 @@ def create_app() -> FastAPI:
     app.include_router(system_router)
     app.include_router(chat_router)
     app.include_router(config_router)
+    app.include_router(control_router)
     app.include_router(ws_router)
     return app
 

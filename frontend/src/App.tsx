@@ -2,14 +2,21 @@ import { useEffect, useState } from 'react'
 import type { ReactNode } from 'react'
 import { useStore } from './store'
 import { connectWs, disconnectWs } from './lib/ws'
-import { getConfig, getObservations, getTelemetry } from './lib/api'
-import { makeDemoObservations, makeDemoTelemetry, makeDemoTurn } from './lib/demo'
+import { getConfig, getObservations, getParams, getTelemetry, setDemoMode } from './lib/api'
+import {
+  makeDemoObservations,
+  makeDemoParams,
+  makeDemoTelemetry,
+  makeDemoTurn,
+} from './lib/demo'
+import SystemSchematic from './components/SystemSchematic'
 import TelemetryChart from './components/TelemetryChart'
+import FocusDrawer from './components/FocusDrawer'
 import ObservationLog from './components/ObservationLog'
 import ChatPanel from './components/ChatPanel'
 import SettingsModal from './components/SettingsModal'
 
-const PUMP_ID = 'org.acme:pump-01'
+const ORG_LABEL = 'org.acme · 4 things'
 
 export default function App() {
   const [settingsOpen, setSettingsOpen] = useState(false)
@@ -22,10 +29,13 @@ export default function App() {
     // It never blocks live data: the WS still connects and REST backfill still
     // runs below — real frames overwrite/extend the seed when a backend exists.
     if (demo) {
+      setDemoMode(true)
+      const now = Date.now()
       store.seed({
-        telemetry: makeDemoTelemetry(),
-        observations: makeDemoObservations(),
+        telemetry: makeDemoTelemetry(now),
+        observations: makeDemoObservations(now),
         turns: [makeDemoTurn()],
+        params: makeDemoParams(),
         dittoConnected: true,
       })
     }
@@ -43,6 +53,9 @@ export default function App() {
         if (obs.length) useStore.getState().backfillObservations(obs)
       })
       .catch(() => {})
+    void getParams()
+      .then((p) => useStore.getState().setParams(p))
+      .catch(() => {})
     void getConfig()
       .then((c) => useStore.getState().setConfig(c))
       .catch(() => {})
@@ -52,16 +65,20 @@ export default function App() {
 
   return (
     <div className="flex min-h-dvh flex-col lg:h-dvh lg:overflow-hidden">
-      <Header pumpId={PUMP_ID} onOpenSettings={() => setSettingsOpen(true)} />
+      <Header orgLabel={ORG_LABEL} onOpenSettings={() => setSettingsOpen(true)} />
 
       <main className="grid min-h-0 flex-1 grid-cols-1 gap-3 p-3 lg:grid-cols-[minmax(0,1.05fr)_minmax(0,0.92fr)_minmax(0,1.12fr)]">
         <Panel
-          title="Live telemetry"
-          subtitle="reported twin state · ~1 Hz"
+          title="Live system"
+          subtitle="reported twin state · 4 components · ~1 Hz"
           icon={<IconWave />}
           accentClass="text-flow"
         >
-          <TelemetryChart />
+          <SystemSchematic />
+          <div className="relative flex min-h-0 flex-1 flex-col border-t border-hair">
+            <TelemetryChart />
+            <FocusDrawer />
+          </div>
         </Panel>
 
         <Panel
@@ -89,7 +106,7 @@ export default function App() {
   )
 }
 
-function Header({ pumpId, onOpenSettings }: { pumpId: string; onOpenSettings: () => void }) {
+function Header({ orgLabel, onOpenSettings }: { orgLabel: string; onOpenSettings: () => void }) {
   const wsConnected = useStore((s) => s.wsConnected)
   const dittoConnected = useStore((s) => s.dittoConnected)
 
@@ -99,11 +116,11 @@ function Header({ pumpId, onOpenSettings }: { pumpId: string; onOpenSettings: ()
         <IconBolt />
       </div>
       <div className="flex items-baseline gap-2.5">
-        <h1 className="text-[15px] font-semibold tracking-tight text-ink">Pump Digital Twin</h1>
-        <span className="hidden text-[12px] text-muted sm:inline">Mission Control</span>
+        <h1 className="text-[15px] font-semibold tracking-tight text-ink">Digital Twin</h1>
+        <span className="hidden text-[12px] text-muted sm:inline">System Control</span>
       </div>
       <span className="ml-1 rounded-md border border-hair bg-surface-2 px-2 py-1 font-mono text-[11px] text-ink-2">
-        {pumpId}
+        {orgLabel}
       </span>
 
       <div className="ml-auto flex items-center gap-2">

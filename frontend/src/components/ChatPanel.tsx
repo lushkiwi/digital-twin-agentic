@@ -69,7 +69,7 @@ export default function ChatPanel() {
             onKeyDown={onKeyDown}
             disabled={streaming}
             rows={1}
-            placeholder={streaming ? 'Agent is working…' : 'Ask the agent to inspect or act on the pump…'}
+            placeholder={streaming ? 'Agent is working…' : 'Ask the agent to inspect or act on the system…'}
             className="scroll-thin max-h-32 min-h-[24px] flex-1 resize-none bg-transparent text-[13px] leading-relaxed text-ink placeholder:text-muted focus:outline-none disabled:cursor-not-allowed"
           />
           <button
@@ -167,7 +167,7 @@ function EmptyState() {
       <p className="mt-1 max-w-[15rem] text-[12px] leading-relaxed text-muted">
         It can read the twin and act on it — each tool call shows the exact JSON sent to Ditto.
       </p>
-      <p className="mt-3 text-[11.5px] text-muted">Try: “the pump is overheating — fix it”</p>
+      <p className="mt-3 text-[11.5px] text-muted">Try: “line flow is dropping and the tank is draining — stabilize it”</p>
     </div>
   )
 }

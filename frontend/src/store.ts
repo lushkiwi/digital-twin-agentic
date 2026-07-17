@@ -2,11 +2,13 @@ import { create } from 'zustand'
 import type {
   ChatEvent,
   ChatTurn,
+  ComponentId,
   Config,
   HistoryMessage,
   Observation,
+  ParamsResponse,
   Step,
-  TelemetryPoint,
+  TelemetryFrame,
   ToolStep,
 } from './types'
 
@@ -15,10 +17,14 @@ const HISTORY_CAP = 10
 
 export interface AppState {
   // ---- data ----
-  telemetry: TelemetryPoint[] // oldest → newest, capped
+  telemetry: TelemetryFrame[] // oldest → newest, capped
   observations: Observation[] // oldest → newest (contract order); UI reverses for display
   turns: ChatTurn[]
   config: Config | null
+  params: ParamsResponse | null // writable-parameter registry (GET /api/params)
+
+  // ---- selection (drives schematic ↔ drawer ↔ charts) ----
+  selectedComponent: ComponentId | null
 
   // ---- connection ----
   wsConnected: boolean
@@ -28,19 +34,23 @@ export interface AppState {
   streaming: boolean
 
   // ---- telemetry actions ----
-  backfillTelemetry: (points: TelemetryPoint[]) => void
-  pushTelemetry: (p: TelemetryPoint) => void
+  backfillTelemetry: (points: TelemetryFrame[]) => void
+  pushTelemetry: (p: TelemetryFrame) => void
 
   // ---- observation actions ----
   backfillObservations: (obs: Observation[]) => void
   pushObservation: (o: Observation) => void
 
+  // ---- selection ----
+  setSelectedComponent: (c: ComponentId | null) => void
+
   // ---- connection actions ----
   setWsConnected: (v: boolean) => void
   setDittoConnected: (v: boolean) => void
 
-  // ---- config ----
+  // ---- config / params ----
   setConfig: (c: Config) => void
+  setParams: (p: ParamsResponse) => void
 
   // ---- chat ----
   startTurn: (userMessage: string) => string
@@ -51,9 +61,10 @@ export interface AppState {
 
   // ---- demo seeding (see lib/demo.ts) ----
   seed: (data: {
-    telemetry: TelemetryPoint[]
+    telemetry: TelemetryFrame[]
     observations: Observation[]
     turns: ChatTurn[]
+    params?: ParamsResponse
     dittoConnected?: boolean
   }) => void
 }
@@ -74,6 +85,8 @@ export const useStore = create<AppState>((set, get) => ({
   observations: [],
   turns: [],
   config: null,
+  params: null,
+  selectedComponent: null,
   wsConnected: false,
   dittoConnected: false,
   streaming: false,
@@ -96,9 +109,12 @@ export const useStore = create<AppState>((set, get) => ({
       return { observations: [...s.observations, o] }
     }),
 
+  setSelectedComponent: (c) => set(() => ({ selectedComponent: c })),
+
   setWsConnected: (v) => set(() => ({ wsConnected: v })),
   setDittoConnected: (v) => set(() => ({ dittoConnected: v })),
   setConfig: (c) => set(() => ({ config: c })),
+  setParams: (p) => set(() => ({ params: p })),
 
   startTurn: (userMessage) => {
     const id = `turn-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
@@ -148,10 +164,11 @@ export const useStore = create<AppState>((set, get) => ({
   },
 
   seed: (data) =>
-    set(() => ({
+    set((s) => ({
       telemetry: data.telemetry.slice(-TELEMETRY_CAP),
       observations: dedupById(data.observations),
       turns: data.turns,
+      params: data.params ?? s.params,
       dittoConnected: data.dittoConnected ?? false,
     })),
 }))

@@ -11,193 +11,126 @@ import {
 } from 'recharts'
 import type { TooltipProps } from 'recharts'
 import { useStore } from '../store'
-import type { TelemetryPoint } from '../types'
-import { fixed, hms, toEpoch } from '../lib/format'
+import type { ComponentId, ParamsResponse, TelemetryFrame } from '../types'
+import { fixed, hms } from '../lib/format'
+import {
+  COMPONENT_CHARTS,
+  OVERVIEW_CHARTS,
+  buildRows,
+  timeDomain,
+  type ChartDef,
+  type ChartRow,
+} from '../lib/series'
 
-const COLORS = {
-  temp: 'var(--color-temp)',
-  pressure: 'var(--color-pressure)',
-  flow: 'var(--color-flow)',
+const CHROME = {
   grid: 'var(--color-grid)',
   axis: 'var(--color-axis)',
   muted: 'var(--color-muted)',
 }
 
-interface Row {
-  t: number
-  temperature: number
-  pressure: number
-  flow_rate: number
-}
-
-interface Threshold {
-  y: number
-  color: string
-  label: string
-}
-
 export default function TelemetryChart() {
   const telemetry = useStore((s) => s.telemetry)
+  const selected = useStore((s) => s.selectedComponent)
+  const params = useStore((s) => s.params)
   const wsConnected = useStore((s) => s.wsConnected)
 
-  const rows: Row[] = useMemo(
-    () =>
-      telemetry.map((p) => ({
-        t: toEpoch(p.ts),
-        temperature: p.temperature,
-        pressure: p.pressure,
-        flow_rate: p.flow_rate,
-      })),
-    [telemetry],
-  )
-
-  const domain: [number, number] | undefined = useMemo(() => {
-    if (rows.length === 0) return undefined
-    return [rows[0].t, rows[rows.length - 1].t]
-  }, [rows])
-
-  const latest: TelemetryPoint | undefined = telemetry[telemetry.length - 1]
-  const empty = rows.length === 0
+  const charts = selected ? COMPONENT_CHARTS[selected] : OVERVIEW_CHARTS
+  const domain = useMemo(() => timeDomain(telemetry), [telemetry])
+  const latest: TelemetryFrame | undefined = telemetry[telemetry.length - 1]
+  const empty = telemetry.length === 0
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {/* Actuator convergence readout — reported vs desired */}
-      <ActuatorRow latest={latest} />
+      {selected ? (
+        <ActuatorRow component={selected} latest={latest} params={params} />
+      ) : (
+        <OverviewLabel />
+      )}
 
-      {/* Small multiples sharing the time axis */}
-      <div className="flex min-h-0 flex-1 flex-col gap-2 px-3 pb-3">
+      <div className="scroll-thin flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto px-3 pb-3">
         {empty ? (
           <EmptyChart wsConnected={wsConnected} />
         ) : (
-          <>
+          charts.map((c, i) => (
             <Mini
-              label="Temperature"
-              unit="°C"
-              color={COLORS.temp}
-              dataKey="temperature"
-              rows={rows}
+              key={c.id}
+              chart={c}
+              telemetry={telemetry}
               domain={domain}
-              yDomain={[40, 100]}
-              yTicks={[40, 60, 80, 100]}
-              precision={1}
-              current={latest?.temperature}
-              thresholds={[
-                { y: 85, color: 'var(--color-sev-warn)', label: 'warn 85' },
-                { y: 95, color: 'var(--color-sev-critical)', label: 'crit 95' },
-              ]}
+              showXAxis={i === charts.length - 1}
             />
-            <Mini
-              label="Pressure"
-              unit="bar"
-              color={COLORS.pressure}
-              dataKey="pressure"
-              rows={rows}
-              domain={domain}
-              yDomain={[1, 7]}
-              yTicks={[1, 3, 5, 7]}
-              precision={2}
-              current={latest?.pressure}
-              thresholds={[{ y: 3.0, color: 'var(--color-sev-warn)', label: 'min 3.0' }]}
-            />
-            <Mini
-              label="Flow rate"
-              unit="L/min"
-              color={COLORS.flow}
-              dataKey="flow_rate"
-              rows={rows}
-              domain={domain}
-              yDomain={[0, 200]}
-              yTicks={[0, 100, 200]}
-              precision={1}
-              current={latest?.flow_rate}
-              showXAxis
-            />
-          </>
+          ))
         )}
       </div>
     </div>
   )
 }
 
-function ActuatorRow({ latest }: { latest: TelemetryPoint | undefined }) {
-  const speedR = latest?.pump_speed_reported
-  const speedD = latest?.pump_speed_desired
-  const valveR = latest?.valve_state_reported
-  const valveD = latest?.valve_state_desired
-  const speedConverging = speedR != null && speedD != null && speedR !== speedD
-  const valveConverging = valveR != null && valveD != null && valveR !== valveD
-
+function OverviewLabel() {
   return (
-    <div className="grid grid-cols-2 gap-2 px-3 pb-3 pt-1">
-      <div className="rounded-lg border border-hair bg-surface-2 px-3 py-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Pump speed</div>
-        <div className="mt-0.5 flex items-baseline gap-2">
-          <span className="text-2xl font-semibold tabular-nums text-ink">{fmtInt(speedR)}</span>
-          <span className="text-[11px] text-muted">%</span>
-          {speedConverging ? (
-            <span className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium tabular-nums text-accent">
-              <Arrow /> {speedD}
-              <span className="text-[10px] font-normal text-muted">target</span>
-            </span>
-          ) : (
-            <span className="ml-auto text-[11px] text-muted">
-              {speedR != null ? 'at target' : ''}
-            </span>
-          )}
-        </div>
-      </div>
-
-      <div className="rounded-lg border border-hair bg-surface-2 px-3 py-2">
-        <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">Valve</div>
-        <div className="mt-0.5 flex items-baseline gap-2">
-          <span className="text-2xl font-semibold capitalize text-ink">{valveR ?? '—'}</span>
-          {valveConverging ? (
-            <span className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium capitalize text-accent">
-              <Arrow /> {valveD}
-              <span className="text-[10px] font-normal normal-case text-muted">target</span>
-            </span>
-          ) : (
-            <span className="ml-auto text-[11px] text-muted">{valveR ? 'at target' : ''}</span>
-          )}
-        </div>
-      </div>
+    <div className="flex items-center gap-2 px-4 pb-1.5 pt-2">
+      <span className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+        System overview
+      </span>
+      <span className="text-[11px] text-muted/70">· select a node to focus</span>
     </div>
   )
 }
 
-function Mini(props: {
-  label: string
-  unit: string
-  color: string
-  dataKey: keyof Row
-  rows: Row[]
+/**
+ * A single small-multiple. Renders one or more lines against a shared time axis,
+ * with optional §3.5 threshold reference lines. Exported so the FocusDrawer can
+ * reuse the exact same trend pattern.
+ */
+export function Mini({
+  chart,
+  telemetry,
+  domain,
+  showXAxis,
+  compact,
+}: {
+  chart: ChartDef
+  telemetry: TelemetryFrame[]
   domain: [number, number] | undefined
-  yDomain: [number, number]
-  yTicks: number[]
-  precision: number
-  current: number | undefined
-  thresholds?: Threshold[]
   showXAxis?: boolean
+  compact?: boolean
 }) {
-  const { label, unit, color, dataKey, rows, domain, yDomain, yTicks, precision, current, thresholds, showXAxis } =
-    props
+  const rows: ChartRow[] = useMemo(() => buildRows(telemetry, chart), [telemetry, chart])
+  const last = rows[rows.length - 1]
+  const primary = chart.lines[0]
+  const current = last ? last[primary.key] : undefined
+  const multi = chart.lines.length > 1
 
   return (
     <div className="flex min-h-0 flex-1 flex-col rounded-lg border border-hair bg-chart">
       <div className="flex items-baseline justify-between px-3 pt-2">
-        <div className="flex items-center gap-1.5">
-          <span className="inline-block h-2 w-2 rounded-full" style={{ background: color }} />
-          <span className="text-[11px] font-medium text-ink-2">{label}</span>
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-2 w-2 rounded-full" style={{ background: primary.color }} />
+          <span className="text-[11px] font-medium text-ink-2">{chart.label}</span>
+          {multi && (
+            <span className="flex items-center gap-2 pl-1">
+              {chart.lines.map((l) => (
+                <span key={l.key} className="flex items-center gap-1">
+                  <span className="inline-block h-1.5 w-1.5 rounded-full" style={{ background: l.color }} />
+                  <span className="text-[10px] text-muted">{l.label ?? l.key}</span>
+                </span>
+              ))}
+            </span>
+          )}
         </div>
-        <div className="flex items-baseline gap-1">
-          <span className="text-[15px] font-semibold tabular-nums text-ink">{fixed(current, precision)}</span>
-          <span className="text-[10px] text-muted">{unit}</span>
-        </div>
+        {!multi && (
+          <div className="flex items-baseline gap-1">
+            <span className="text-[15px] font-semibold tabular-nums text-ink">
+              {fixed(current, chart.precision)}
+            </span>
+            <span className="text-[10px] text-muted">{chart.unit}</span>
+          </div>
+        )}
       </div>
-      <div className="min-h-0 flex-1">
+      <div className="min-h-0 flex-1" style={compact ? { minHeight: 62 } : undefined}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart data={rows} margin={{ top: 6, right: 12, bottom: showXAxis ? 2 : 4, left: 0 }}>
-            <CartesianGrid stroke={COLORS.grid} strokeWidth={1} vertical={false} />
+            <CartesianGrid stroke={CHROME.grid} strokeWidth={1} vertical={false} />
             <XAxis
               dataKey="t"
               type="number"
@@ -205,53 +138,56 @@ function Mini(props: {
               scale="time"
               hide={!showXAxis}
               tickFormatter={(v: number) => hms(v)}
-              tick={{ fill: COLORS.muted, fontSize: 10 }}
+              tick={{ fill: CHROME.muted, fontSize: 10 }}
               tickLine={false}
-              axisLine={{ stroke: COLORS.axis }}
+              axisLine={{ stroke: CHROME.axis }}
               minTickGap={44}
               height={16}
             />
             <YAxis
-              domain={yDomain}
-              ticks={yTicks}
+              domain={chart.yDomain}
+              ticks={chart.yTicks}
               width={34}
-              tick={{ fill: COLORS.muted, fontSize: 10 }}
+              tick={{ fill: CHROME.muted, fontSize: 10 }}
               tickLine={false}
               axisLine={false}
               tickFormatter={(v: number) => String(v)}
             />
-            {thresholds?.map((th) => (
+            {chart.thresholds?.map((t) => (
               <ReferenceLine
-                key={th.label}
-                y={th.y}
-                stroke={th.color}
+                key={t.label}
+                y={t.y}
+                stroke={t.color}
                 strokeDasharray="4 4"
                 strokeOpacity={0.7}
                 strokeWidth={1}
                 label={{
-                  value: th.label,
+                  value: t.label,
                   position: 'insideTopRight',
-                  fill: th.color,
+                  fill: t.color,
                   fontSize: 9,
                   fontWeight: 600,
                 }}
               />
             ))}
             <Tooltip
-              cursor={{ stroke: COLORS.axis, strokeWidth: 1 }}
+              cursor={{ stroke: CHROME.axis, strokeWidth: 1 }}
               content={(p: TooltipProps<number, string>) => (
-                <ChartTooltip {...p} unit={unit} precision={precision} label={label} />
+                <ChartTooltip {...p} chart={chart} />
               )}
             />
-            <Line
-              type="monotone"
-              dataKey={dataKey as string}
-              stroke={color}
-              strokeWidth={2}
-              dot={false}
-              activeDot={{ r: 4, fill: color, stroke: 'var(--color-chart)', strokeWidth: 2 }}
-              isAnimationActive={false}
-            />
+            {chart.lines.map((l) => (
+              <Line
+                key={l.key}
+                type="monotone"
+                dataKey={l.key}
+                stroke={l.color}
+                strokeWidth={2}
+                dot={false}
+                activeDot={{ r: 4, fill: l.color, stroke: 'var(--color-chart)', strokeWidth: 2 }}
+                isAnimationActive={false}
+              />
+            ))}
           </LineChart>
         </ResponsiveContainer>
       </div>
@@ -259,22 +195,76 @@ function Mini(props: {
   )
 }
 
-function ChartTooltip(
-  props: TooltipProps<number, string> & { unit: string; precision: number; label: string },
-) {
-  const { active, payload, unit, precision, label } = props
+function ChartTooltip(props: TooltipProps<number, string> & { chart: ChartDef }) {
+  const { active, payload, chart } = props
   if (!active || !payload || payload.length === 0) return null
-  const point = payload[0]
-  const t = point.payload?.t as number | undefined
-  const value = typeof point.value === 'number' ? point.value : undefined
+  const t = payload[0]?.payload?.t as number | undefined
   return (
     <div className="rounded-lg border border-hair-2 bg-elevated px-2.5 py-1.5 shadow-xl">
       <div className="font-mono text-[10px] tabular-nums text-muted">{t ? hms(t) : ''}</div>
-      <div className="mt-0.5 flex items-baseline gap-1.5 text-[12px]">
-        <span className="text-ink-2">{label}</span>
-        <span className="font-semibold tabular-nums text-ink">{fixed(value, precision)}</span>
-        <span className="text-[10px] text-muted">{unit}</span>
-      </div>
+      {chart.lines.map((l) => {
+        const p = payload.find((x) => x.dataKey === l.key)
+        const value = typeof p?.value === 'number' ? p.value : undefined
+        return (
+          <div key={l.key} className="mt-0.5 flex items-baseline gap-1.5 text-[12px]">
+            <span className="inline-block h-2 w-2 rounded-full" style={{ background: l.color }} />
+            <span className="text-ink-2">{l.label ?? chart.label}</span>
+            <span className="font-semibold tabular-nums text-ink">{fixed(value, chart.precision)}</span>
+            <span className="text-[10px] text-muted">{chart.unit}</span>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * Actuator convergence readout for the selected component — its writable param(s)
+ * reported vs desired. Generalized from the v1 pump/valve version. Exported so the
+ * FocusDrawer reuses the same reported↔desired row treatment.
+ */
+export function ActuatorRow({
+  component,
+  latest,
+  params,
+}: {
+  component: ComponentId
+  latest: TelemetryFrame | undefined
+  params: ParamsResponse | null
+}) {
+  const specs = params?.components[component]?.params ?? []
+  const comp = latest?.components[component] as unknown as Record<string, number> | undefined
+
+  if (specs.length === 0) return <div className="px-3 pt-2" />
+
+  return (
+    <div className="grid grid-cols-1 gap-2 px-3 pb-3 pt-2">
+      {specs.map((spec) => {
+        const reported = comp?.[`${spec.name}_reported`]
+        const desired = comp?.[`${spec.name}_desired`]
+        const converging = reported != null && desired != null && reported !== desired
+        return (
+          <div key={spec.name} className="rounded-lg border border-hair bg-surface-2 px-3 py-2">
+            <div className="text-[10px] font-semibold uppercase tracking-wider text-muted">
+              {spec.label}
+            </div>
+            <div className="mt-0.5 flex items-baseline gap-2">
+              <span className="text-2xl font-semibold tabular-nums text-ink">{fmtInt(reported)}</span>
+              <span className="text-[11px] text-muted">{spec.unit}</span>
+              {converging ? (
+                <span className="ml-auto inline-flex items-center gap-1 text-[12px] font-medium tabular-nums text-accent">
+                  <Arrow /> {desired}
+                  <span className="text-[10px] font-normal text-muted">target</span>
+                </span>
+              ) : (
+                <span className="ml-auto text-[11px] text-muted">
+                  {reported != null ? 'at target' : ''}
+                </span>
+              )}
+            </div>
+          </div>
+        )
+      })}
     </div>
   )
 }

@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Optional
+from typing import Dict, Optional
 
 from dotenv import load_dotenv
 from pydantic import BaseModel
@@ -20,6 +20,10 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Load the repo-root .env once at import time.  Values already in the real
 # environment win (override=False) so container/CI env vars are respected.
 load_dotenv(REPO_ROOT / ".env", override=False)
+
+# Imported AFTER load_dotenv so params.THING_NS reflects the repo-root .env.  params is
+# the frozen single source of truth for component ids / thing ids (avoids duplication).
+from . import params  # noqa: E402
 
 
 def _get(name: str, default: str = "") -> str:
@@ -46,7 +50,10 @@ class Settings(BaseModel):
     ditto_base_url: str = _get("DITTO_BASE_URL", "http://localhost:8080")
     ditto_user: str = _get("DITTO_USER", "ditto")
     ditto_pass: str = _get("DITTO_PASS", "ditto")
-    thing_id: str = _get("THING_ID", "org.acme:pump-01")
+    # V2 is a four-component chained system (CONTRACTS §0): one thing per component,
+    # ids derived from the frozen param registry so bounds/ids live in exactly one place.
+    thing_ns: str = params.THING_NS
+    thing_ids: Dict[str, str] = {c: params.thing_id(c) for c in params.COMPONENTS}
 
     backend_port: int = _get_int("BACKEND_PORT", 8000)
 

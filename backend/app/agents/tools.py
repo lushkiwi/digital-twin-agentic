@@ -1,12 +1,15 @@
-"""Tool layer — the safety boundary for the interactive agent.
+"""Tool layer — the safety boundary for the interactive agent (v2, four components).
 
 Every tool call from the LLM is validated against a strict Pydantic model enforcing
 the CONTRACTS §3 bounds BEFORE anything executes.  An unknown tool or a validation
 failure produces a structured error ``ToolOutcome`` (ok=False) that is handed back to
 the model as the tool result — it is never executed and never raises.
 
-The write tools live here (this is the write-capable module).  The sleeper must NOT
-import this module.
+The write tools live here (this is the write-capable module).  Their schemas, arg
+validators and Ditto dispatch are ALL derived from the frozen param registry
+(``app.params``) so bounds/ids live in exactly one place.  The sleeper must NOT import
+this module — but this module may import the sleeper (one-directional) to read the
+current per-component status for ``get_system_state`` / ``GET /api/system``.
 """
 from __future__ import annotations
 
@@ -16,8 +19,12 @@ from typing import Any, Awaitable, Callable, Dict, Literal, Optional, Tuple, Typ
 
 from pydantic import BaseModel, Field, ValidationError
 
+from .. import params
+from ..config import settings
+from ..params import COMPONENTS, PARAMS, make_args_model, make_tool_schema
 from ..state import app_state, downsample
 from ..twin.client import ditto_client
+from .sleeper import sleeper
 
 
 # --------------------------------------------------------------------------- #
@@ -39,8 +46,11 @@ class ToolOutcome:
 
 
 # --------------------------------------------------------------------------- #
-# Per-tool argument models (the enforced bounds)
+# Read-tool argument models (write-tool models come from the registry)
 # --------------------------------------------------------------------------- #
+_Component = Literal["motor", "pump", "valve", "tank"]
+
+
 class NoArgs(BaseModel):
     model_config = {"extra": "ignore"}
 
@@ -48,6 +58,7 @@ class NoArgs(BaseModel):
 class TelemetryWindowArgs(BaseModel):
     model_config = {"extra": "ignore"}
     minutes: int = Field(ge=1, le=10)
+    component: Optional[_Component] = None
 
 
 class ObservationsArgs(BaseModel):
@@ -55,33 +66,183 @@ class ObservationsArgs(BaseModel):
     limit: int = Field(ge=1, le=20)
 
 
-class SetPumpSpeedArgs(BaseModel):
-    model_config = {"extra": "forbid"}
-    speed: int = Field(ge=0, le=100)
-    reason: str
-
-
-class SetValveStateArgs(BaseModel):
-    model_config = {"extra": "forbid"}
-    state: Literal["open", "closed"]
-    reason: str
-
-
 class RunStressTestArgs(BaseModel):
     model_config = {"extra": "forbid"}
-    profile: Literal["thermal", "pressure"]
+    profile: Literal["thermal", "flow"]
     duration_s: int = Field(ge=10, le=120)
 
 
 # --------------------------------------------------------------------------- #
-# OpenAI-format tool JSON schemas
+# Shared system-state builder (used by get_system_state AND GET /api/system)
 # --------------------------------------------------------------------------- #
-TOOL_SCHEMAS: list[dict] = [
+async def build_system_state() -> dict:
+    """All four components: reported + desired + latest telemetry + status.
+
+    Reads reported/desired/telemetry live from Ditto (never raises — a down/missing
+    component reads as empty), and the status from the sleeper's current rule flags.
+    """
+    things = await ditto_client.get_all_things()  # component -> thing | None
+    status = sleeper.component_status()
+    out: dict = {"components": {}}
+    for comp in COMPONENTS:
+        thing = things.get(comp) or {}
+        features = thing.get("features", {}) if isinstance(thing, dict) else {}
+        act = features.get(comp, {}) or {}
+        telem = (features.get("telemetry", {}) or {}).get("properties", {}) or {}
+        out["components"][comp] = {
+            "reported": act.get("properties", {}) or {},
+            "desired": act.get("desiredProperties", {}) or {},
+            "telemetry": telem,
+            "status": status.get(comp, "ok"),
+        }
+    out["ditto_connected"] = app_state.ditto_connected
+    return out
+
+
+# --------------------------------------------------------------------------- #
+# Read handlers
+# --------------------------------------------------------------------------- #
+async def _get_system_state(_: NoArgs) -> ToolOutcome:
+    try:
+        state = await build_system_state()
+    except Exception as exc:  # noqa: BLE001
+        return ToolOutcome(ok=False, error=f"Could not read system state: {exc}")
+    return ToolOutcome(ok=True, result=state)
+
+
+async def _get_telemetry_window(args: TelemetryWindowArgs) -> ToolOutcome:
+    points = downsample(app_state.telemetry.window(args.minutes), 60)
+    if args.component:
+        # Slim each frame down to the requested component only.
+        points = [
+            {
+                "ts": p.get("ts"),
+                "components": {
+                    args.component: (p.get("components", {}) or {}).get(args.component, {})
+                },
+            }
+            for p in points
+        ]
+    return ToolOutcome(
+        ok=True,
+        result={
+            "minutes": args.minutes,
+            "component": args.component,
+            "count": len(points),
+            "points": points,
+        },
+    )
+
+
+async def _get_observations(args: ObservationsArgs) -> ToolOutcome:
+    obs = app_state.observations.recent(args.limit)
+    return ToolOutcome(ok=True, result={"observations": obs})
+
+
+# --------------------------------------------------------------------------- #
+# Write handlers — one per registry param, dispatched via put_desired
+# --------------------------------------------------------------------------- #
+def _make_write_handler(param: params.Param) -> "Handler":
+    async def handler(args: BaseModel) -> ToolOutcome:
+        value = getattr(args, param.arg_name)
+        reason = getattr(args, "reason")
+        status, body, request_desc = await ditto_client.put_desired(
+            param.thing_id, param.feature, param.name, value
+        )
+        ok = 200 <= status < 300
+        return ToolOutcome(
+            ok=ok,
+            result={f"desired_{param.name}": value, "reason": reason, "response": body},
+            ditto_request=request_desc,
+            ditto_status=status,
+            error=None if ok else f"Ditto write failed (status {status}).",
+        )
+
+    return handler
+
+
+# Keep references to background stress tasks so they aren't garbage-collected.
+_stress_tasks: set = set()
+
+# Stress profiles (CONTRACTS §3.4): thermal ramps pump speed to 90, flow ramps motor
+# setpoint to 2700; both snapshot -> ramp -> hold -> restore via the same put_desired.
+_STRESS_PROFILES = {
+    "thermal": {"component": "pump", "prop": "pump_speed", "peak": 90, "step": 10, "default": 70},
+    "flow": {"component": "motor", "prop": "rpm_setpoint", "peak": 2700, "step": 200, "default": 1800},
+}
+
+
+def _current_desired(component: str, prop: str, default: int) -> int:
+    """Best-effort read of a current desired property from the per-thing cache."""
+    try:
+        thing = app_state.get_twin(settings.thing_ids[component])
+        val = thing.get("features", {}).get(component, {}).get("desiredProperties", {}).get(prop)
+        if isinstance(val, (int, float)):
+            return int(val)
+    except Exception:  # noqa: BLE001
+        pass
+    return default
+
+
+async def _stress_ramp(profile: str, duration_s: int) -> None:
+    """Snapshot -> ramp desired up to peak in steps -> hold -> restore.
+
+    Writes go through the same ``put_desired`` path as the interactive tools.
+    """
+    spec = _STRESS_PROFILES[profile]
+    component, prop = spec["component"], spec["prop"]
+    thing_id = settings.thing_ids[component]
+    feature = component
+    peak, step = spec["peak"], spec["step"]
+    snapshot = _current_desired(component, prop, spec["default"])
+    interval = max(duration_s / 6.0, 0.5)
+
+    ladder: list[int] = []
+    v = snapshot
+    while v < peak:
+        v = min(v + step, peak)
+        ladder.append(v)
+    if not ladder:  # already at/above peak
+        ladder = [peak]
+    try:
+        for target in ladder:
+            await ditto_client.put_desired(thing_id, feature, prop, target)
+            await asyncio.sleep(interval)
+        await asyncio.sleep(interval)  # hold one extra step at the peak
+    except asyncio.CancelledError:
+        raise
+    except Exception:  # noqa: BLE001 — never let a stress task crash the app
+        pass
+    finally:
+        # Always attempt to restore the original desired value.
+        try:
+            await ditto_client.put_desired(thing_id, feature, prop, snapshot)
+        except Exception:  # noqa: BLE001
+            pass
+
+
+async def _run_stress_test(args: RunStressTestArgs) -> ToolOutcome:
+    task = asyncio.create_task(_stress_ramp(args.profile, args.duration_s))
+    _stress_tasks.add(task)
+    task.add_done_callback(_stress_tasks.discard)
+    return ToolOutcome(
+        ok=True,
+        result={"status": "started", "profile": args.profile, "duration_s": args.duration_s},
+    )
+
+
+# --------------------------------------------------------------------------- #
+# OpenAI-format tool JSON schemas (advertised set)
+# --------------------------------------------------------------------------- #
+_READ_SCHEMAS: list[dict] = [
     {
         "type": "function",
         "function": {
-            "name": "get_twin_state",
-            "description": "Read the full twin: reported and desired pump state plus latest telemetry.",
+            "name": "get_system_state",
+            "description": (
+                "Read the full system: reported + desired actuator state, latest telemetry "
+                "and status for all four components (motor, pump, valve, tank)."
+            ),
             "parameters": {"type": "object", "properties": {}, "required": []},
         },
     },
@@ -89,7 +250,10 @@ TOOL_SCHEMAS: list[dict] = [
         "type": "function",
         "function": {
             "name": "get_telemetry_window",
-            "description": "Recent telemetry from the ring buffer, downsampled to <=60 points.",
+            "description": (
+                "Recent telemetry frames from the ring buffer, downsampled to <=60 points. "
+                "Optionally slim each frame to a single component."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -98,7 +262,12 @@ TOOL_SCHEMAS: list[dict] = [
                         "minimum": 1,
                         "maximum": 10,
                         "description": "How many minutes back to fetch (1-10).",
-                    }
+                    },
+                    "component": {
+                        "type": "string",
+                        "enum": ["motor", "pump", "valve", "tank"],
+                        "description": "Optional: restrict each frame to this component.",
+                    },
                 },
                 "required": ["minutes"],
             },
@@ -123,170 +292,32 @@ TOOL_SCHEMAS: list[dict] = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_pump_speed",
-            "description": "Write the desired pump speed (0-100). Reported speed slews toward it.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "speed": {"type": "integer", "minimum": 0, "maximum": 100},
-                    "reason": {"type": "string", "description": "Why this change is needed."},
-                },
-                "required": ["speed", "reason"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "set_valve_state",
-            "description": "Write the desired valve state (open or closed).",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "state": {"type": "string", "enum": ["open", "closed"]},
-                    "reason": {"type": "string", "description": "Why this change is needed."},
-                },
-                "required": ["state", "reason"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
-            "name": "run_stress_test",
-            "description": (
-                "Start a background stress ramp: snapshot current desired speed, ramp to 90 "
-                "in steps of 10, hold, then restore. Returns immediately."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "profile": {"type": "string", "enum": ["thermal", "pressure"]},
-                    "duration_s": {"type": "integer", "minimum": 10, "maximum": 120},
-                },
-                "required": ["profile", "duration_s"],
-            },
-        },
-    },
 ]
 
-
-# --------------------------------------------------------------------------- #
-# Handlers
-# --------------------------------------------------------------------------- #
-async def _get_twin_state(_: NoArgs) -> ToolOutcome:
-    try:
-        thing = await ditto_client.get_thing()
-    except Exception as exc:  # noqa: BLE001
-        return ToolOutcome(ok=False, error=f"Could not read twin: {exc}")
-    features = thing.get("features", {}) if isinstance(thing, dict) else {}
-    pump = features.get("pump", {})
-    telemetry = features.get("telemetry", {}).get("properties", {})
-    return ToolOutcome(
-        ok=True,
-        result={
-            "reported": pump.get("properties", {}),
-            "desired": pump.get("desiredProperties", {}),
-            "telemetry": telemetry,
+_STRESS_SCHEMA: dict = {
+    "type": "function",
+    "function": {
+        "name": "run_stress_test",
+        "description": (
+            "Start a background stress ramp (snapshot -> ramp -> hold -> restore). "
+            "'thermal' ramps pump speed to 90; 'flow' ramps motor setpoint to 2700. "
+            "Returns immediately."
+        ),
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "profile": {"type": "string", "enum": ["thermal", "flow"]},
+                "duration_s": {"type": "integer", "minimum": 10, "maximum": 120},
+            },
+            "required": ["profile", "duration_s"],
         },
-    )
+    },
+}
 
-
-async def _get_telemetry_window(args: TelemetryWindowArgs) -> ToolOutcome:
-    points = app_state.telemetry.window(args.minutes)
-    points = downsample(points, 60)
-    return ToolOutcome(ok=True, result={"minutes": args.minutes, "count": len(points), "points": points})
-
-
-async def _get_observations(args: ObservationsArgs) -> ToolOutcome:
-    obs = app_state.observations.recent(args.limit)
-    return ToolOutcome(ok=True, result={"observations": obs})
-
-
-async def _set_pump_speed(args: SetPumpSpeedArgs) -> ToolOutcome:
-    status, body, request_desc = await ditto_client.put_desired("pump_speed", args.speed)
-    ok = 200 <= status < 300
-    return ToolOutcome(
-        ok=ok,
-        result={"desired_pump_speed": args.speed, "reason": args.reason, "response": body},
-        ditto_request=request_desc,
-        ditto_status=status,
-        error=None if ok else f"Ditto write failed (status {status}).",
-    )
-
-
-async def _set_valve_state(args: SetValveStateArgs) -> ToolOutcome:
-    status, body, request_desc = await ditto_client.put_desired("valve_state", args.state)
-    ok = 200 <= status < 300
-    return ToolOutcome(
-        ok=ok,
-        result={"desired_valve_state": args.state, "reason": args.reason, "response": body},
-        ditto_request=request_desc,
-        ditto_status=status,
-        error=None if ok else f"Ditto write failed (status {status}).",
-    )
-
-
-# Keep references to background stress tasks so they aren't garbage-collected.
-_stress_tasks: set = set()
-
-
-def _current_desired_speed() -> int:
-    """Best-effort read of the current desired pump speed from the twin cache."""
-    try:
-        pump = app_state.twin_cache.get("features", {}).get("pump", {})
-        val = pump.get("desiredProperties", {}).get("pump_speed")
-        if isinstance(val, (int, float)):
-            return int(val)
-    except Exception:  # noqa: BLE001
-        pass
-    return 60  # thing.json default
-
-
-async def _stress_ramp(profile: str, duration_s: int) -> None:
-    """Snapshot -> ramp desired speed to 90 in steps of 10 -> hold -> restore.
-
-    Writes go through the same ``put_desired`` path as the interactive tools.
-    """
-    snapshot = _current_desired_speed()
-    interval = max(duration_s / 6.0, 0.5)
-    # Ascending ladder from just above the snapshot up to 90 in +10 steps.
-    ladder: list[int] = []
-    v = snapshot
-    while v < 90:
-        v = min(v + 10, 90)
-        ladder.append(v)
-    if not ladder:  # already at/above 90
-        ladder = [90]
-    try:
-        for target in ladder:
-            await ditto_client.put_desired("pump_speed", target)
-            await asyncio.sleep(interval)
-        # Hold one extra step at the peak.
-        await asyncio.sleep(interval)
-    except asyncio.CancelledError:
-        raise
-    except Exception:  # noqa: BLE001 — never let a stress task crash the app
-        pass
-    finally:
-        # Always attempt to restore the original desired speed.
-        try:
-            await ditto_client.put_desired("pump_speed", snapshot)
-        except Exception:  # noqa: BLE001
-            pass
-
-
-async def _run_stress_test(args: RunStressTestArgs) -> ToolOutcome:
-    task = asyncio.create_task(_stress_ramp(args.profile, args.duration_s))
-    _stress_tasks.add(task)
-    task.add_done_callback(_stress_tasks.discard)
-    return ToolOutcome(
-        ok=True,
-        result={"status": "started", "profile": args.profile, "duration_s": args.duration_s},
-    )
+# Advertised: 3 reads + 4 registry write tools + run_stress_test.
+TOOL_SCHEMAS: list[dict] = (
+    _READ_SCHEMAS + [make_tool_schema(p) for p in PARAMS] + [_STRESS_SCHEMA]
+)
 
 
 # --------------------------------------------------------------------------- #
@@ -295,14 +326,19 @@ async def _run_stress_test(args: RunStressTestArgs) -> ToolOutcome:
 Handler = Callable[[Any], Awaitable[ToolOutcome]]
 
 READ_TOOLS: Dict[str, Tuple[Type[BaseModel], Handler]] = {
-    "get_twin_state": (NoArgs, _get_twin_state),
+    "get_system_state": (NoArgs, _get_system_state),
+    # Unadvertised v1 alias kept so old callers/tests still resolve (CONTRACTS §3.4).
+    "get_twin_state": (NoArgs, _get_system_state),
     "get_telemetry_window": (TelemetryWindowArgs, _get_telemetry_window),
     "get_observations": (ObservationsArgs, _get_observations),
 }
 
+# One validated write tool per registry param, plus the stress test.
+_PARAM_WRITE_TOOLS: Dict[str, Tuple[Type[BaseModel], Handler]] = {
+    p.tool_name: (make_args_model(p), _make_write_handler(p)) for p in PARAMS
+}
 WRITE_TOOLS: Dict[str, Tuple[Type[BaseModel], Handler]] = {
-    "set_pump_speed": (SetPumpSpeedArgs, _set_pump_speed),
-    "set_valve_state": (SetValveStateArgs, _set_valve_state),
+    **_PARAM_WRITE_TOOLS,
     "run_stress_test": (RunStressTestArgs, _run_stress_test),
 }
 
@@ -310,7 +346,7 @@ ALL_TOOLS: Dict[str, Tuple[Type[BaseModel], Handler]] = {**READ_TOOLS, **WRITE_T
 
 
 def tool_schemas() -> list[dict]:
-    """The 6 OpenAI-format tool schemas passed to the LLM."""
+    """The advertised OpenAI-format tool schemas passed to the LLM."""
     return TOOL_SCHEMAS
 
 

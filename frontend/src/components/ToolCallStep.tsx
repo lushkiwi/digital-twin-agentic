@@ -3,7 +3,13 @@ import type { ReactNode } from 'react'
 import type { ToolStep } from '../types'
 import { pretty } from '../lib/format'
 
-const WRITE_TOOLS = new Set(['set_pump_speed', 'set_valve_state', 'run_stress_test'])
+const WRITE_TOOLS = new Set([
+  'set_motor_rpm',
+  'set_pump_speed',
+  'set_valve_position',
+  'set_tank_drain_rate',
+  'run_stress_test',
+])
 
 function isWrite(step: ToolStep): boolean {
   // A present ditto_request means a mutating call — the demo money-shot.
