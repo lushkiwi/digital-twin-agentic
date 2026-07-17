@@ -1,0 +1,140 @@
+# Trimmed from the official Eclipse Ditto deployment/docker/docker-compose.yml (3.5.12).
+# Removed: things-search, connectivity, swagger-ui (not needed for this MVP — SSE change
+# streaming lives in the gateway), host port mappings for mongodb/gateway, and the
+# /var/log/ditto bind volume (breaks on a fresh macOS host).
+name: ditto
+
+services:
+  mongodb:
+    image: docker.io/mongo:7.0
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    restart: always
+    networks:
+      default:
+        aliases:
+          - mongodb
+    command: mongod --storageEngine wiredTiger --noscripting
+    user: mongodb
+    environment:
+      TZ: UTC
+    logging:
+      options:
+        max-size: 50m
+
+  policies:
+    image: docker.io/eclipse/ditto-policies:${DITTO_VERSION:-3.5.12}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    restart: always
+    networks:
+      default:
+        aliases:
+          - ditto-cluster
+    environment:
+      - TZ=UTC
+      - BIND_HOSTNAME=0.0.0.0
+      - JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError -XX:+UseContainerSupport -XX:+UseStringDeduplication -Xss512k -XX:MaxRAMPercentage=50 -XX:+UseG1GC -XX:MaxGCPauseMillis=150 -Dpekko.coordinated-shutdown.exit-jvm=on -Dpekko.cluster.shutdown-after-unsuccessful-join-seed-nodes=180s -Dpekko.cluster.failure-detector.threshold=15.0 -Dpekko.cluster.failure-detector.expected-response-after=10s -Dpekko.cluster.failure-detector.acceptable-heartbeat-pause=20s -Dpekko.cluster.downing-provider-class=
+      - MONGO_DB_HOSTNAME=mongodb
+    healthcheck:
+      test: curl --fail `hostname`:7626/alive || exit 1
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    logging:
+      options:
+        max-size: 50m
+
+  things:
+    image: docker.io/eclipse/ditto-things:${DITTO_VERSION:-3.5.12}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    restart: always
+    networks:
+      default:
+        aliases:
+          - ditto-cluster
+    depends_on:
+      - policies
+    environment:
+      - TZ=UTC
+      - BIND_HOSTNAME=0.0.0.0
+      - JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError -XX:+UseContainerSupport -XX:+UseStringDeduplication -Xss512k -XX:MaxRAMPercentage=50 -XX:+UseG1GC -XX:MaxGCPauseMillis=150 -Dpekko.coordinated-shutdown.exit-jvm=on -Dpekko.cluster.shutdown-after-unsuccessful-join-seed-nodes=180s -Dpekko.cluster.failure-detector.threshold=15.0 -Dpekko.cluster.failure-detector.expected-response-after=10s -Dpekko.cluster.failure-detector.acceptable-heartbeat-pause=20s -Dpekko.cluster.downing-provider-class=
+      - MONGO_DB_HOSTNAME=mongodb
+    healthcheck:
+      test: curl --fail `hostname`:7626/alive || exit 1
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    logging:
+      options:
+        max-size: 50m
+
+  gateway:
+    image: docker.io/eclipse/ditto-gateway:${DITTO_VERSION:-3.5.12}
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+    restart: always
+    networks:
+      default:
+        aliases:
+          - ditto-cluster
+    depends_on:
+      - policies
+    environment:
+      - TZ=UTC
+      - BIND_HOSTNAME=0.0.0.0
+      - ENABLE_PRE_AUTHENTICATION=true
+      - JAVA_TOOL_OPTIONS=-XX:ActiveProcessorCount=2 -XX:+ExitOnOutOfMemoryError -XX:+UseContainerSupport -XX:+UseStringDeduplication -Xss512k -XX:MaxRAMPercentage=50 -XX:+UseG1GC -XX:MaxGCPauseMillis=150 -Dpekko.coordinated-shutdown.exit-jvm=on -Dpekko.cluster.shutdown-after-unsuccessful-join-seed-nodes=180s -Dpekko.cluster.failure-detector.threshold=15.0 -Dpekko.cluster.failure-detector.expected-response-after=10s -Dpekko.cluster.failure-detector.acceptable-heartbeat-pause=20s -Dpekko.cluster.downing-provider-class=
+    healthcheck:
+      test: curl --fail `hostname`:7626/alive || exit 1
+      interval: 30s
+      timeout: 15s
+      retries: 4
+      start_period: 120s
+    logging:
+      options:
+        max-size: 50m
+
+  ditto-ui:
+    image: docker.io/eclipse/ditto-ui:${DITTO_VERSION:-3.5.12}
+    deploy:
+      resources:
+        limits:
+          memory: 32m
+    restart: always
+    logging:
+      options:
+        max-size: 10m
+
+  nginx:
+    image: docker.io/nginx:1.27-alpine
+    deploy:
+      resources:
+        limits:
+          memory: 32m
+    restart: always
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/nginx.htpasswd:/etc/nginx/nginx.htpasswd:ro
+      - ./nginx/nginx-cors.conf:/etc/nginx/nginx-cors.conf:ro
+      - ./nginx/mime.types:/etc/nginx/mime.types:ro
+      - ./nginx/index.html:/etc/nginx/html/index.html:ro
+    ports:
+      - "${DITTO_EXTERNAL_PORT:-8080}:80"
+    depends_on:
+      - gateway
+      - ditto-ui
+    logging:
+      options:
+        max-size: 10m

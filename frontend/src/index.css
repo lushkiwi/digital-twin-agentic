@@ -1,0 +1,130 @@
+@import 'tailwindcss';
+
+/*
+  Design tokens — sleek dark control-room aesthetic.
+  Series + severity colors follow the dataviz skill palette (dark steps,
+  validated against the #1a1a19 chart surface). One accent (blue) used sparingly.
+*/
+@theme {
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: ui-monospace, 'SF Mono', 'JetBrains Mono', Menlo, Consolas, monospace;
+
+  /* surfaces */
+  --color-plane: #0d0d0d; /* page plane */
+  --color-surface: #161615; /* panel */
+  --color-surface-2: #1c1c1a; /* raised within panel */
+  --color-elevated: #232321; /* cards / inputs */
+  --color-chart: #1a1a19; /* chart surface (validator target) */
+
+  /* hairlines */
+  --color-hair: rgba(255, 255, 255, 0.07);
+  --color-hair-2: rgba(255, 255, 255, 0.12);
+
+  /* ink */
+  --color-ink: #f4f4f2;
+  --color-ink-2: #c3c2b7;
+  --color-muted: #8b8a83;
+
+  /* accent (used sparingly) */
+  --color-accent: #3987e5;
+  --color-accent-2: #2a78d6;
+
+  /* telemetry series */
+  --color-temp: #d95926; /* orange */
+  --color-pressure: #3987e5; /* blue */
+  --color-flow: #199e70; /* aqua */
+
+  /* status / severity (fixed, never themed) */
+  --color-sev-info: #3987e5;
+  --color-sev-warn: #fab219;
+  --color-sev-critical: #d03b3b;
+  --color-sev-recovered: #0ca30c;
+
+  /* chart chrome */
+  --color-grid: #2c2c2a;
+  --color-axis: #383835;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background: var(--color-plane);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+  font-size: 14px;
+  line-height: 1.45;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  /* No horizontal page scroll; vertical allowed for stacked (narrow) layout. */
+  overflow-x: hidden;
+}
+
+/* Thin, unobtrusive scrollbars for panel bodies */
+@layer utilities {
+  .scroll-thin {
+    scrollbar-width: thin;
+    scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+  }
+  .scroll-thin::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+  }
+  .scroll-thin::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.2);
+  }
+  .scroll-thin::-webkit-scrollbar-track {
+    background: transparent;
+  }
+}
+
+/* Subtle live pulse for status dots (kept quiet) */
+@keyframes dt-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.dt-pulse {
+  animation: dt-pulse 2.4s ease-in-out infinite;
+}
+
+@keyframes dt-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.dt-spin {
+  animation: dt-spin 0.8s linear infinite;
+}
+
+@keyframes dt-fade-in {
+  from {
+    opacity: 0;
+    transform: translateY(2px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+.dt-fade-in {
+  animation: dt-fade-in 0.28s ease-out both;
+}
+
+/* Recharts: keep focus outlines off the surfaces, let our tooltip style win */
+.recharts-surface {
+  overflow: visible;
+}
